@@ -1,0 +1,66 @@
+#!/bin/bash
+
+run_hook() {
+    my_power_off() {
+        read -n 1 -s -p "Press any key to shutdown"
+        poweroff -f
+    }
+
+    modprobe -a -q dm-crypt >/dev/null 2>&1
+    [ "${quiet}" = "y" ] && CSQUIET=">/dev/null"
+
+    if [ -n "${usbcryptdevice}" ]; then
+        DEPRECATED_CRYPT=0
+        IFS=: read usbcryptdev usbcryptname usbcryptoptions <<EOF
+$usbcryptdevice
+EOF
+    else
+        DEPRECATED_CRYPT=1
+    fi
+
+    if [ -n "${cryptdevice}" ]; then
+        IFS=: read cryptdev cryptname cryptoptions <<EOF
+$cryptdevice
+EOF
+    else
+        DEPRECATED_CRYPT=1
+    fi
+
+    if usbresolved=$(resolve_device "${usbcryptdev}" ${rootdelay}); then
+        if cryptsetup isLuks ${usbresolved} >/dev/null 2>&1; then
+            if [ ${DEPRECATED_CRYPT} -eq 1 ]; then
+                err "Wrong boot option."
+                my_power_off
+            fi
+
+            #loop until we get a real password
+            while ! eval cryptsetup open --type luks ${usbresolved} ${usbcryptname} ${CSQUIET}; do
+                sleep 2;
+            done
+            if resolved=$(resolve_device "${cryptdev}" ${rootdelay}); then
+                if cryptsetup isLuks ${resolved} >/dev/null 2>&1; then
+                    if eval cryptsetup open --type luks ${resolved} ${cryptname} --key-file /dev/mapper/${usbcryptname} ${CSQUIET}; then
+                        cryptsetup close ${usbcryptname}
+                    else
+                        err "Wrong keyfile"
+                        my_power_off
+                    fi
+                else
+                    err "Failed to open encryption mapping: The device ${cryptdev} is not a LUKS volume."
+                    my_power_off
+                fi
+            else
+                err "Can't find ${cryptdev}."
+                my_power_off
+            fi
+        else
+            err "Failed to open encryption mapping: The device ${usbcryptdev} is not a LUKS volume."
+            my_power_off
+        fi
+    else
+        err "Can't find ${usbcryptdev}."
+        my_power_off
+    fi
+}
+
+
